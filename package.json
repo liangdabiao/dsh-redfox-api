@@ -1,0 +1,60 @@
+{
+  "name": "dsh-redfox-api",
+  "version": "0.1.0",
+  "description": "RedFoxHub（红狐数据）API 调研工作台：201 个端点本地目录检索（零积分离线）、GET/POST 真实调用（业务码 2000/3203/3801 语义+扣费提示）、调用历史持久化。3 个原生工具 + 侧栏概览/调用历史/端点库/设置面板。",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/host.js",
+  "exports": {
+    ".": "./src/host.js",
+    "./client": "./dist/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "icon": "./icon.svg",
+  "files": [
+    "src",
+    "dist",
+    "lib",
+    "skills",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "redfox",
+    "social-media",
+    "hot-rank"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node test/lib.test.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0"
+  }
+}

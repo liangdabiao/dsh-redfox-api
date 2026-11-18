@@ -1,0 +1,4 @@
+# RedFox API 助手技能快照。
+- insert:
+    - id: redfox-api
+      name: 'dsh-redfox-api'
