@@ -3,6 +3,7 @@
 DeepSeek Harness（dsh）插件：**RedFoxHub（红狐数据）API** 的端点检索与调用工作台（抖音、小红书、公众号、B站、快手、视频号、今日头条、TikTok、YouTube、X、Instagram、微博、知乎、汽车/电商、全网热点榜、AI 搜索、图片视频生成等 **28 类共 201 个端点**）。
 
 技能来自 [redfox_api_skill](https://github.com/liangdabiao/redfox_api_skill)（liangdabiao）。
+<img width="2099" height="909" alt="image" src="https://github.com/user-attachments/assets/8581a151-3fe5-4d30-89f3-03a6b5c87728" />
 
 ## 使用
 
