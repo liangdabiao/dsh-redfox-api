@@ -9,7 +9,7 @@ import { basename } from 'node:path'
 import { createCatalog } from '../lib/searcher.js'
 import { createSkillProvider } from '../lib/skills.js'
 import { registerApi } from '../lib/api.js'
-import { callRedFox, classifyResult, chargeNote, normalizePath } from '../lib/client.js'
+import { callRedFox, classifyResult, chargeNote, chargeMention, normalizePath } from '../lib/client.js'
 import { readHistory, appendHistory, updateHistory, clearHistory, getHistory, deleteHistory } from '../lib/data.js'
 import { resolveToken, maskSettings, saveSettings, clearSettings } from '../lib/settings.js'
 
@@ -110,7 +110,10 @@ export const redfoxEndpointTool = {
     }
     if (args.action === 'detail') {
       if (!args.key) throw new Error('detail 动作需要 key 参数（端点 name / 路径 / sdk_method）。')
-      const d = cat.detail(args.key, Boolean(args.full))
+      // full 传字符串 "false" 时 Boolean("false") 也是 true，会莫名多出整段原始记录。
+      // 而且查询用这个布尔、拼输出也必须用同一个，否则会印出「原始记录：undefined」。
+      const full = args.full === true || String(args.full ?? '').trim().toLowerCase() === 'true'
+      const d = cat.detail(args.key, full)
       if (!d) {
         const hits = cat.search(args.key, 5)
         return result(false, `没有找到端点「${args.key}」。${hits.length ? `相近候选：\n${hits.map(fmt).join('\n')}` : '先用 action=search 换个关键词找。'}`)
@@ -124,7 +127,7 @@ export const redfoxEndpointTool = {
           d.returns ? `返回：${d.returns}` : '',
           d.example_call ? `示例：${d.example_call}` : '',
           d.tips?.length ? `注意：${d.tips.join('；')}` : '',
-          args.full ? `原始记录：${JSON.stringify(d.raw, null, 2)}` : ''].filter(Boolean).join('\n'))
+          full ? `原始记录：${JSON.stringify(d.raw, null, 2)}` : ''].filter(Boolean).join('\n'))
     }
     // search
     const kw = args.keyword || ''
@@ -216,7 +219,8 @@ export const redfoxCallTool = {
       updateHistory(record.id, {
         status: kind === 'error' ? 'error' : 'ok',
         kind, code, httpStatus: status, ms,
-        charge: kind === 'no_data' ? chargeNote(json) : '',
+        // 成功调用也会写「已扣除 X 积分」——扣费要能看到，不能只在无数据时记。
+        charge: chargeMention(json),
         responseSnippet: body.slice(0, 4000),
       })
       const truncated = body.length > 6000

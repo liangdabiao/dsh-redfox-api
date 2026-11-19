@@ -10,6 +10,7 @@
     "./client": "./dist/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "icon": "./icon.svg",

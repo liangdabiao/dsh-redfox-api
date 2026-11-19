@@ -53,6 +53,16 @@ await test('searcher: detail 给真实 api_name 与 example_call 提示', async 
   assert.equal(cat.detail('zzz-不存在'), null)
 })
 
+await test('searcher: detail 容忍「平台.接口名」与大小写写法', async () => {
+  // 用户和模型很常照 URL 写 hotspot.getListByPlatform（真实 sdk_method 为 get_platform_rank）。
+  const d = cat.detail('hotspot.getListByPlatform')
+  assert.equal(d?.name, 'hotspot.get_platform_rank', '应按路径末段唯一定位')
+  assert.equal(cat.detail('hotSpot.getListByPlatform')?.name, 'hotspot.get_platform_rank')
+  assert.equal(cat.detail('DOUYIN.SEARCH_USERS')?.name, 'douyin.search_users')
+  // 仍然必须唯一：多处重名要留给用户/模型自己选，不能乱猜。
+  assert.equal(cat.detail('dyData.searchUser'), null)
+})
+
 await test('searcher: platform 列端点 + defaultsPresent', async () => {
   const items = cat.byPlatform('douyin')
   assert.ok(items.length >= 5)
@@ -67,7 +77,7 @@ await test('searcher: 中文分词带二元组', async () => {
 })
 
 // ── client.js ──────────────────────────────────────────────
-const { normalizePath, classifyResult, chargeNote, buildUrl, summarize } = await import('../lib/client.js')
+const { normalizePath, classifyResult, chargeNote, chargeMention, buildUrl, summarize } = await import('../lib/client.js')
 
 await test('client: normalizePath 补斜杠', async () => {
   assert.equal(normalizePath('/story/api/x'), '/story/api/x')
@@ -89,6 +99,14 @@ await test('client: chargeNote 区分未扣除与已扣除', async () => {
   assert.equal(chargeNote({ msg: '积分未扣除: API错误: 所请求的资源在平台上未找到。' }), '积分未扣除')
   assert.equal(chargeNote({ msg: '已扣除 0.600 积分。暂无作品' }), '已扣除 0.600 积分')
   assert.equal(chargeNote({ msg: '其他' }), '扣费情况见 msg')
+})
+
+await test('client: chargeMention 只记真正的扣费信息', async () => {
+  // 成功调用的 msg 常为空，不能每条都挂「扣费情况见 msg」；只有 msg 提到积分才记。
+  assert.equal(chargeMention({ msg: '' }), '')
+  assert.equal(chargeMention({ msg: 'success' }), '')
+  assert.equal(chargeMention({ msg: '已扣除 0.600 积分。' }), '已扣除 0.600 积分')
+  assert.equal(chargeMention({ msg: '积分未扣除: API错误' }), '积分未扣除')
 })
 
 await test('client: buildUrl query 编码', async () => {
@@ -191,6 +209,12 @@ await test('host: redfox_endpoint 四个动作', async () => {
   assert.equal(detail.ok, true)
   assert.ok(detail.data.includes('keyword'))
   assert.ok(detail.data.includes('api_name') || detail.data.includes('keyword='))
+  assert.ok(!detail.data.includes('原始记录'), '不传 full 不应带原始记录')
+  const fullOn = await t.execute({ action: 'detail', key: 'douyin.search_users', full: 'true' }, t.parameters)
+  assert.ok(fullOn.data.includes('原始记录：{'), 'full="true" 要带完整原始记录')
+  const fullOff = await t.execute({ action: 'detail', key: 'douyin.search_users', full: 'false' }, t.parameters)
+  assert.ok(!fullOff.data.includes('原始记录'), 'full="false" 字符串不能被当成 true')
+  assert.ok(!fullOff.data.includes('undefined'), 'full="false" 不能印出「原始记录：undefined」')
   const miss = await t.execute({ action: 'detail', key: 'dyData.searchUser' }, t.parameters)
   assert.equal(miss.ok, false)
   assert.ok(miss.summary.includes('相近候选'), 'detail 未命中要给搜索候选')

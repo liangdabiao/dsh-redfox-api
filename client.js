@@ -6,7 +6,7 @@
 // → 打开新对话并把指令填进输入框（不自动发送）。
 // ============================================================================
 const h = require('react').createElement
-const { useState, useEffect } = require('react')
+const { useState, useEffect, useRef } = require('react')
 
 const PANEL_ID = 'redfox-api'
 const BASE = 'redfox-api'
@@ -16,10 +16,13 @@ function act(prompt) {
   if (startPrompt) startPrompt(prompt)
 }
 
-function PanelIcon(props) {
-  return h('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', ...props },
-    h('rect', { x: 2.5, y: 2.5, width: 19, height: 19, rx: 5, fill: '#c2410c' }),
-    h('text', { x: 12, y: 16, 'font-size': 9, fill: '#fff', 'text-anchor': 'middle' }, '🦊'))
+function PanelIcon({ size = 24, ...rest } = {}) {
+  // 纯几何狐狸头（不用 emoji / <text>，避免字体替换把图标画成豆腐块）。
+  return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', ...rest },
+    h('path', { d: 'M5 5l5 3h4l5-3-1.5 8c-1 3-3.5 5-5.5 5s-4.5-2-5.5-5z', fill: '#c2410c' }),
+    h('path', { d: 'M12 14.5l2.3 1.4L12 18.7 9.7 15.9z', fill: '#fff', fillOpacity: 0.92 }),
+    h('circle', { cx: 9.7, cy: 11.2, r: 1.1, fill: '#fff' }),
+    h('circle', { cx: 14.3, cy: 11.2, r: 1.1, fill: '#fff' }))
 }
 
 async function fetchJson(path) {
@@ -66,24 +69,30 @@ function HomeTab(props) {
   const [calls, setCalls] = useState(null)
   const [balance, setBalance] = useState(null)
   const [error, setError] = useState('')
-  useEffect(() => {
+  const load = () => {
+    setError('')
     fetchJson('/api/stats')
-      .then((s) => { setStats(s); if (s.configured) fetchJson('/api/balance').then(setBalance).catch(() => {}) })
+      .then((s) => { setStats(s); if (s.configured) fetchJson('/api/balance').then(setBalance).catch(() => setBalance({ error: '余额获取失败' })) })
       .catch((e) => setError(e.message))
     fetchJson('/api/calls').then((c) => setCalls(c.calls)).catch(() => {})
-  }, [])
-  if (error) return h('div', { style: styles.error }, error)
+  }
+  useEffect(() => { load() }, [])
+  if (error && !stats) return h('div', { style: styles.error }, error)
   const recent = (calls || []).slice(0, 5)
+  const needsKey = stats != null && !stats.configured
   return h('div', null,
+    error ? h('div', { style: styles.errorBox }, error) : null,
     h('div', { style: styles.ctaCard },
       h('div', { style: styles.ctaText },
-        h('div', { style: styles.ctaTitle }, '28 类 201 个红狐数据端点，随口就能查'),
-        h('div', { style: styles.ctaMuted }, '点右边的按钮 → 打开新对话，输入框已填好示例；换成你的关键词回车即可。检索端点零积分，调用按次计费。')),
+        h('div', { style: styles.ctaTitle }, needsKey ? '先花 30 秒配好 API key' : '28 类 201 个红狐数据端点，随口就能查'),
+        h('div', { style: styles.ctaMuted }, needsKey
+          ? '没有 key 只能检索本地端点目录，redfox_call 会在最后一步报错。粘一个 key 就能真实调用（redfox.hk/settings/api-keys）。'
+          : '点右边的按钮 → 打开新对话，输入框已填好示例；换成你的关键词回车即可。检索端点零积分，调用按次计费。')),
       h('button', {
         style: styles.ctaButton,
-        onClick: () => act('帮我调研抖音上「乐高」相关的热门视频和账号：先 redfox_endpoint 找端点，再 action=detail 查参数，然后 redfox_call 调用并汇总。'),
-        title: '填进对话：先找端点再调用红狐数据',
-      }, '🚀 发起新调研')),
+        onClick: () => (needsKey ? props.go('settings') : act('帮我调研抖音上「乐高」相关的热门视频和账号：先 redfox_endpoint 找端点，再 action=detail 查参数，然后 redfox_call 调用并汇总。')),
+        title: needsKey ? '去设置里粘贴 RedFox API key' : '填进对话：先找端点再调用红狐数据',
+      }, needsKey ? '⚙️ 配置 API key' : '🚀 发起新调研')),
 
     h('div', { style: styles.card },
       h('div', { style: styles.sectionTitle }, '工作台'),
@@ -95,7 +104,8 @@ function HomeTab(props) {
         h('div', { style: styles.stat }, h('div', { style: styles.statNum }, stats ? String(stats.today) : '—'), h('div', { style: styles.mutedSmall }, '今日')),
         h('div', { style: styles.stat }, h('div', { style: { ...styles.statNum, color: stats?.configured ? '#1a7f37' : '#b58a00' } }, stats ? (stats.configured ? '✓' : '!') : '—'), h('div', { style: styles.mutedSmall }, 'Key'))),
       balance && !balance.error && balance.totalAvailablePoints != null ? h('div', { style: styles.ok }, `剩余积分 ${balance.totalAvailablePoints}（免费 ${balance.freeAvailablePoints ?? '—'} / 付费 ${balance.paidAvailablePoints ?? '—'}）`) : null,
-      !stats?.configured ? h('div', { style: styles.hint }, '还没配置 RedFox API key：去「⚙️ 设置」粘贴即可真实调用（redfox.hk/settings/api-keys 获取，或设 REDFOX_API_KEY 环境变量）。') : null),
+      balance?.error ? h('div', { style: styles.errorBox }, `${balance.error}（点「刷新」重试）`) : null,
+      !stats?.configured ? h('div', { style: styles.hint }, '还没配置 RedFox API key：点上面的「⚙️ 配置 API key」或去「⚙️ 设置」粘贴即可真实调用（redfox.hk/settings/api-keys 获取，或设 REDFOX_API_KEY 环境变量）。') : null),
 
     h('div', { style: styles.card },
       h('div', { style: styles.row },
@@ -110,6 +120,7 @@ function HomeTab(props) {
       h('div', { style: styles.row },
         h('div', { style: styles.sectionTitle }, '最近调用'),
         h('span', { style: styles.grow }),
+        h('button', { style: styles.linkBtn, onClick: load }, '刷新'),
         h('button', { style: styles.linkBtn, onClick: () => props.go('history') }, '查看全部 →')),
       recent.length === 0
         ? h('div', { style: styles.muted }, '还没有调用记录。发起一次调用后，这里会按时间列出每次请求与业务码分类。')
@@ -128,9 +139,12 @@ function HistoryTab(props) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(props.pending || null)
   const [confirmClear, setConfirmClear] = useState(false)
+  const detailRef = useRef(null)
 
-  const load = () => fetchJson('/api/calls').then((d) => setCalls(d.calls)).catch((e) => setError(e.message))
+  const load = () => fetchJson('/api/calls').then((d) => { setCalls(d.calls); setError('') }).catch((e) => setError(e.message))
   useEffect(() => { load() }, [])
+  // 详情卡插在列表顶部，从底部点开时视口不动，等于「点了没反应」，要主动滚上去。
+  useEffect(() => { if (selected) detailRef.current?.scrollIntoView?.({ block: 'nearest' }) }, [selected])
 
   const remove = async (id) => {
     try {
@@ -146,8 +160,7 @@ function HistoryTab(props) {
     } catch (e) { setError(e.message) }
   }
 
-  if (error) return h('div', { style: styles.error }, error)
-  if (calls === null) return h('div', { style: styles.muted }, '加载中…')
+  if (calls === null) return error ? h('div', { style: styles.error }, error) : h('div', { style: styles.muted }, '加载中…')
 
   const q = query.trim().toLowerCase()
   const filtered = q
@@ -155,12 +168,13 @@ function HistoryTab(props) {
     : calls
 
   return h('div', null,
-    selected ? h('div', { style: styles.detailCard },
+    error ? h('div', { style: styles.errorBox }, error) : null,
+    selected ? h('div', { ref: detailRef, style: styles.detailCard },
       h('div', { style: styles.row },
         h('span', { style: { ...styles.status, color: statusColor(selected) } }, statusText(selected)),
         h('span', { style: styles.callPath }, `${selected.method || 'GET'} ${selected.path}`),
         h('span', { style: styles.grow }),
-        h('button', { style: styles.actionBtn, onClick: () => act(`再调用一次这个红狐端点：redfox_call method=${selected.method || 'GET'} path=${selected.path}\n参数：${JSON.stringify(selected.params || {})}${selected.note ? `\n用途：${selected.note}` : ''}`) }, '🔁 再调一次'),
+        h('button', { style: styles.actionBtn, onClick: () => act(`再调用一次这个红狐端点（按次计费，先说明要花的积分并等我确认再调）：redfox_call method=${selected.method || 'GET'} path=${selected.path}\n参数：${JSON.stringify(selected.params || {})}${selected.note ? `\n用途：${selected.note}` : ''}`) }, '🔁 再调一次'),
         h('button', { style: styles.actionBtn, onClick: () => remove(selected.id) }, '🗑 删除'),
         h('button', { style: styles.linkBtn, onClick: () => setSelected(null) }, '关闭')),
       h('div', { style: styles.mutedSmall }, `${fmtTime(selected.ts)} · ${selected.method || 'GET'} · ${selected.ms != null ? `${selected.ms}ms` : '—'}${selected.code != null ? ` · code=${selected.code}` : ''}${selected.kind ? ` · ${KIND_LABEL[selected.kind] || selected.kind}` : ''}${selected.charge ? ` · ${selected.charge}` : ''}${selected.note ? ` · ${selected.note}` : ''}`),
@@ -180,7 +194,9 @@ function HistoryTab(props) {
         ? h('span', null,
             h('button', { style: styles.dangerBtn, onClick: clearAll }, '确认清空'),
             h('button', { style: styles.linkBtn, onClick: () => setConfirmClear(false) }, '取消'))
-        : h('button', { style: styles.linkBtn, onClick: () => setConfirmClear(true) }, '清空历史')),
+        : h('span', null,
+            h('button', { style: styles.linkBtn, onClick: load }, '刷新'),
+            h('button', { style: styles.linkBtn, onClick: () => setConfirmClear(true) }, '清空历史'))),
 
     filtered.length === 0
       ? h('div', { style: styles.card },
@@ -206,10 +222,12 @@ function EndpointsTab() {
   const [query, setQuery] = useState('')
   const [platform, setPlatform] = useState('')
   const [detail, setDetail] = useState(null)
+  const detailRef = useRef(null)
   const load = () => fetchJson('/api/endpoints')
-    .then(setData)
+    .then((d) => { setData(d); setError('') })
     .catch((e) => setError(e.message))
   useEffect(() => { load() }, [])
+  useEffect(() => { if (detail) detailRef.current?.scrollIntoView?.({ block: 'nearest' }) }, [detail])
   const loadFiltered = () => {
     const qs = new URLSearchParams()
     if (query.trim()) qs.set('q', query.trim())
@@ -233,7 +251,8 @@ function EndpointsTab() {
   }
 
   return h('div', null,
-    detail ? h('div', { style: styles.detailCard },
+    error ? h('div', { style: styles.errorBox }, error) : null,
+    detail ? h('div', { ref: detailRef, style: styles.detailCard },
       h('div', { style: styles.row },
         h('span', { style: { ...styles.callPath, fontWeight: 700 } }, `${detail.http_method} ${detail.path}`),
         h('span', { style: styles.tag }, detail.name),
@@ -246,7 +265,7 @@ function EndpointsTab() {
       detail.returns ? h('div', { style: styles.mutedSmall }, `返回：${detail.returns}`) : null,
       detail.example_call ? h('pre', { style: styles.pre }, detail.example_call) : null,
       h('div', { style: styles.row, marginTop: 6 },
-        h('button', { style: styles.actionBtn, onClick: () => act(`用 redfox_call 调用红狐端点 ${detail.http_method} ${detail.path}（参数名以 redfox_endpoint action=detail 的 api_name 为准），参数：`) }, '用这个调研'))) : null,
+        h('button', { style: styles.actionBtn, onClick: () => act(`用 redfox_call 调用红狐端点 ${detail.http_method} ${detail.path}（按次计费，先说明要花的积分并等我确认再调）。参数名以 detail 的 api_name 为准${detail.example_call ? `，照这个示例的默认值填参数：${detail.example_call}` : ''}，参数：`) }, '用这个调研'))) : null,
 
     h('div', { style: styles.card },
       h('div', { style: styles.row },
@@ -258,10 +277,11 @@ function EndpointsTab() {
       h('button', { key: '', style: !platform ? styles.quickActive : styles.quick, onClick: () => setPlatform('') }, '全部'),
       data.platforms.map((p) => h('button', { key: p.name, style: platform === p.name ? styles.quickActive : styles.quick, onClick: () => setPlatform(p.name), title: `${p.label} · ${p.count} 个端点` }, `${p.label} ${p.count}`))),
     h('input', { style: styles.search, placeholder: '搜索端点，如「抖音 账号」「小红书 笔记」「hot rank」「评论」…', value: query, onChange: (e) => setQuery(e.target.value) }),
-    h('div', { style: styles.mutedSmall, marginBottom: 8 }, `匹配 ${endpoints.length} 个`),
+    h('div', { style: styles.mutedSmall, marginBottom: 8 }, `匹配 ${data.count != null ? data.count : endpoints.length} 个${platform ? `（已筛选 ${platform}）` : ''}${data.count > endpoints.length ? `，显示前 ${endpoints.length} 个` : ''}`),
     endpoints.map((e) => h('div', { key: e.path, style: styles.card },
       h('div', { style: styles.row },
         h('span', { style: styles.callPath }, `${e.method} ${e.path}`),
+        e.platformLabel ? h('span', { style: styles.tag }, e.platformLabel) : null,
         e.isUpload ? h('span', { style: styles.warnTag }, '上传') : null,
         h('span', { style: styles.grow }),
         h('button', { style: styles.linkBtn, onClick: () => openDetail(e.name) }, '参数'),
@@ -305,11 +325,11 @@ function SettingsTab() {
       h('div', { style: styles.sectionTitle }, '⚙️ RedFox API key'),
       info === null ? h('div', { style: styles.muted }, '加载中…')
         : h('div', { style: styles.muted },
-            info.configured ? `已配置 ✓（${info.tokenMasked}）· 来源：${SOURCE_LABEL[info.source] || info.source || '面板'}` : '未配置。粘贴下面并保存，即可真实调用。'),
+            info.configured ? `已配置 ✓（${info.tokenMasked}）· 来源：${SOURCE_LABEL[info.source] || info.source || '面板'}` : '未配置。三条路都能配：① 下面粘贴保存；② 设环境变量 REDFOX_API_KEY；③ 插件 Config 的 redfoxApiKey。'),
       h('input', { type: 'password', placeholder: 'RedFox API key（ak_...）', value: key, onChange: (e) => setKey(e.target.value), style: styles.search }),
       h('div', { style: styles.row },
         h('button', { style: styles.button, onClick: save }, '保存'),
-        info?.configured ? h('button', { style: styles.tab, onClick: clear }, '清除已存') : null),
+        info?.source === 'panel' ? h('button', { style: styles.tab, onClick: clear }, '清除已存') : null),
       msg ? h('div', { style: styles.ok }, msg) : null,
       error ? h('div', { style: styles.error }, error) : null,
       h('div', { style: styles.mutedSmall },
@@ -333,8 +353,8 @@ function GuideTab() {
       h('div', { style: styles.stepList },
         h('div', { style: styles.quote }, 'code=2000 → 成功，数据在 data'),
         h('div', { style: styles.quote }, 'code=3203/3801 且文案是「未查询到相关数据/暂未收录/暂无作品」→ 查无数据（不是失败，但看 msg 判断扣没扣积分）'),
-        h('div', { style: styles.quote }, '其他 code → 真错误：1001/1002 参数问题、3103/3105 key 问题、3201 积分不足、4004 限流')),
-        '退出「无数据」不等于免费：3203 常写明「积分未扣除」，3801 实测会扣 0.600 积分。'),
+        h('div', { style: styles.quote }, '其他 code → 真错误：1001/1002 参数问题、3103/3105/3107 key 问题、3201 积分不足、4004 限流')),
+        '被判为「无数据」不等于免费：3203 常写明「积分未扣除」，3801 实测会扣 0.600 积分。'),
     h('div', { style: styles.card },
       h('div', { style: styles.sectionTitle }, '调用避坑'),
       h('div', { style: styles.stepList },
