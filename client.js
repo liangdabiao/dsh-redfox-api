@@ -68,6 +68,8 @@ function HomeTab(props) {
   const [stats, setStats] = useState(null)
   const [calls, setCalls] = useState(null)
   const [balance, setBalance] = useState(null)
+  const [reports, setReports] = useState(null)
+  const [homeDir, setHomeDir] = useState('')
   const [error, setError] = useState('')
   const load = () => {
     setError('')
@@ -77,6 +79,19 @@ function HomeTab(props) {
     fetchJson('/api/calls').then((c) => setCalls(c.calls)).catch(() => {})
   }
   useEffect(() => { load() }, [])
+  // 概览上的「最新报告」：拿最近活跃工作区的前 3 篇，点进去看全部。
+  useEffect(() => {
+    fetchJson('/api/reports/workspaces')
+      .then((d) => {
+        const w = d.workspaces?.[0]
+        if (!w) { setReports([]); return }
+        setHomeDir(w.path)
+        fetchJson('/api/reports/list?dir=' + encodeURIComponent(w.path))
+          .then((r) => setReports((r.entries || []).slice(0, 3)))
+          .catch(() => setReports([]))
+      })
+      .catch(() => setReports([]))
+  }, [])
   if (error && !stats) return h('div', { style: styles.error }, error)
   const recent = (calls || []).slice(0, 5)
   const needsKey = stats != null && !stats.configured
@@ -115,6 +130,20 @@ function HomeTab(props) {
       h('div', { style: styles.quickList },
         QUICK.map((q) => h('button', { key: q.label, style: styles.quick, onClick: () => act(q.prompt), title: `填进对话：${q.prompt}` },
           h('span', { style: styles.quickIcon }, q.icon), q.label)))),
+
+    h('div', { style: styles.card },
+      h('div', { style: styles.row },
+        h('div', { style: styles.sectionTitle }, '📄 最新调研报告'),
+        h('span', { style: styles.grow }),
+        h('button', { style: styles.linkBtn, onClick: () => props.go('reports') }, '查看全部 →')),
+      reports === null
+        ? h('div', { style: styles.muted }, '加载中…')
+        : reports.length === 0
+          ? h('div', { style: styles.muted }, '工作区里还没有报告文件。让 agent 把这次调研写成 .md，这里就会列出来。')
+          : reports.map((r) => h('div', { key: r.path, style: styles.callRow, onClick: () => props.go('reports', { dir: homeDir, path: r.path }) },
+              h('span', { style: styles.reportName }, r.name),
+              h('span', { style: styles.grow }),
+              h('span', { style: styles.mutedSmall }, `${fmtSize(r.size)} · ${fmtDate(r.mtime)}`)))),
 
     h('div', { style: styles.card },
       h('div', { style: styles.row },
@@ -211,6 +240,255 @@ function HistoryTab(props) {
             r.responseSnippet ? h('span', { style: styles.tag }, '可读响应') : null),
           h('div', { style: styles.callPath }, `${r.method || 'GET'} ${r.path}`),
           Object.keys(r.params || {}).length ? h('div', { style: styles.mutedSmall }, `参数 ${JSON.stringify(r.params)}`) : null)))
+}
+
+// ---------------------------------------------------------------------------
+// 📄 调研报告：直接读工作区里的 Markdown（不复制副本，改了文件刷新即可见）
+// ---------------------------------------------------------------------------
+function fmtSize(n) {
+  if (n == null) return '—'
+  if (n < 1024) return `${n}B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`
+  return `${(n / 1024 / 1024).toFixed(1)}MB`
+}
+function fmtDate(ms) {
+  try {
+    const d = new Date(ms)
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  } catch { return '' }
+}
+
+// 极简 Markdown → React 节点：只覆盖调研报告真会用到的语法（标题/表格/列表/引用/代码/加粗/链接）。
+function inlineMd(text, key) {
+  const nodes = []
+  const re = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g
+  let last = 0
+  let m
+  let i = 0
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index))
+    const tok = m[0]
+    if (tok.startsWith('**')) nodes.push(h('b', { key: `${key}b${i}` }, tok.slice(2, -2)))
+    else if (tok.startsWith('`')) nodes.push(h('code', { key: `${key}c${i}`, style: styles.inlineCode }, tok.slice(1, -1)))
+    else {
+      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok)
+      // 报告内容来自抓来的网页，链接只放行安全协议，`javascript:` 之类降级成纯文本。
+      if (/^(https?:|mailto:|#|\/)/i.test(link[2])) nodes.push(h('a', { key: `${key}a${i}`, href: link[2], target: '_blank', rel: 'noreferrer', style: styles.mdLink }, link[1]))
+      else nodes.push(h('span', { key: `${key}a${i}` }, link[1]))
+    }
+    last = m.index + tok.length
+    i++
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
+}
+
+function renderMarkdown(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  const out = []
+  let i = 0
+  let key = 0
+  const isList = (l) => /^\s*[-*+]\s+/.test(l) || /^\s*\d+[.)]\s+/.test(l)
+  while (i < lines.length) {
+    const line = lines[i]
+    if (/^```/.test(line.trim())) {
+      const buf = []
+      i++
+      while (i < lines.length && !/^```/.test(lines[i].trim())) { buf.push(lines[i]); i++ }
+      i++
+      out.push(h('pre', { key: key++, style: styles.mdCode }, buf.join('\n')))
+      continue
+    }
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((s) => s.trim())
+      const head = cells(line)
+      i += 2
+      const rows = []
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { rows.push(cells(lines[i])); i++ }
+      out.push(h('table', { key: key++, style: styles.mdTable },
+        h('thead', null, h('tr', null, head.map((c, ci) => h('th', { key: ci, style: styles.mdTh }, inlineMd(c, `h${ci}`))))),
+        h('tbody', null, rows.map((r, ri) => h('tr', { key: ri }, r.map((c, ci) => h('td', { key: ci, style: styles.mdTd }, inlineMd(c, `r${ri}c${ci}`))))))))
+      continue
+    }
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line)
+    if (heading) {
+      const size = [17, 15.5, 14.5, 13.5][heading[1].length - 1]
+      out.push(h('div', { key: key++, style: { ...styles.mdH, fontSize: size } }, inlineMd(heading[2], `h${key}`)))
+      i++
+      continue
+    }
+    if (/^\s*([-*_]\s*){3,}$/.test(line)) { out.push(h('hr', { key: key++, style: styles.mdHr })); i++; continue }
+    if (/^>\s?/.test(line)) {
+      const buf = []
+      while (i < lines.length && /^>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^>\s?/, '')); i++ }
+      out.push(h('div', { key: key++, style: styles.mdQuote }, inlineMd(buf.join(' '), `q${key}`)))
+      continue
+    }
+    if (isList(line)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(line)
+      const items = []
+      while (i < lines.length && isList(lines[i])) {
+        items.push(lines[i].replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ''))
+        i++
+      }
+      out.push(h(ordered ? 'ol' : 'ul', { key: key++, style: styles.mdList },
+        items.map((t, ii) => h('li', { key: ii, style: styles.mdLi }, inlineMd(t, `l${key}_${ii}`)))))
+      continue
+    }
+    if (!line.trim()) { i++; continue }
+    const buf = []
+    while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```)/.test(lines[i]) && !/^>\s?/.test(lines[i]) && !isList(lines[i]) && !/^\s*\|/.test(lines[i])) {
+      buf.push(lines[i]); i++
+    }
+    // 以 | 开头但够不成表格的行会走到这儿：buf 为空时必须吃掉这一行，否则死循环。
+    if (!buf.length) { buf.push(line); i++ }
+    out.push(h('p', { key: key++, style: styles.mdP }, inlineMd(buf.join('\n'), `p${key}`)))
+  }
+  return out
+}
+
+function ReportsTab(props) {
+  const [workspaces, setWorkspaces] = useState(null)
+  const [dir, setDir] = useState(() => { try { return localStorage.getItem('redfox:reportsDir') || '' } catch { return '' } })
+  const [depth, setDepth] = useState(0)
+  const [query, setQuery] = useState('')
+  const [data, setData] = useState(null)
+  const [doc, setDoc] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const docRef = useRef(null)
+
+  useEffect(() => {
+    fetchJson('/api/reports/workspaces')
+      .then((d) => {
+        const list = d.workspaces || []
+        setWorkspaces(list)
+        const saved = (() => { try { return localStorage.getItem('redfox:reportsDir') || '' } catch { return '' } })()
+        // 记住的目录可能已被删/改名：不在工作区列表里就回落到最近活跃的那个。
+        const known = list.find((w) => w.path === saved && w.exists)
+        const asked = list.find((w) => w.path === props.initial?.dir)
+        const start = asked?.path || known?.path || list[0]?.path || saved || ''
+        if (!start) return
+        setDir(start)
+        scan(start, 0)
+        const want = props.initial?.path
+        if (want) open({ path: want })
+      })
+      .catch((e) => setError(e.message))
+  }, [])
+  useEffect(() => { if (doc) docRef.current?.scrollIntoView?.({ block: 'start' }) }, [doc])
+
+  const scan = (target = dir, nextDepth = depth) => {
+    if (!target || !target.trim()) { setData(null); return }
+    setBusy(true); setError('')
+    setDoc(null)
+    const qs = new URLSearchParams({ dir: target.trim(), depth: String(nextDepth) })
+    if (query.trim()) qs.set('q', query.trim())
+    fetchJson('/api/reports/list?' + qs.toString())
+      .then((d) => setData(d))
+      .catch((e) => { setError(e.message); setData(null) })
+      .finally(() => setBusy(false))
+  }
+  // 搜索框打字才自动重扫，且必须用「已扫描的目录」——用输入框里没提交的路径会扫出别的结果或 403。
+  useEffect(() => {
+    if (!data) return undefined
+    const t = setTimeout(() => scan(data.dir || dir, depth), 300)
+    return () => clearTimeout(t)
+  }, [query])
+
+  const open = (entry) => {
+    setError('')
+    setDoc(null)
+    fetchJson('/api/reports/read?path=' + encodeURIComponent(entry.path))
+      .then(setDoc)
+      .catch((e) => setError(e.message))
+  }
+  const pick = (path) => {
+    const target = String(path || '').trim()
+    if (!target) return
+    setDir(target)
+    try { localStorage.setItem('redfox:reportsDir', target) } catch { /* 隐私模式不记也行 */ }
+    setDoc(null)
+    scan(target, depth)
+  }
+  const toggleDepth = () => {
+    const next = depth ? 0 : 1
+    setDepth(next)
+    setData(null)
+    scan(dir, next)
+  }
+  const entries = data?.entries || []
+
+  return h('div', null,
+    h('div', { style: styles.card },
+      h('div', { style: styles.row },
+        h('div', { style: styles.sectionTitle }, '📄 调研报告'),
+        h('span', { style: styles.grow }),
+        h('span', { style: styles.mutedSmall }, data ? `${entries.length} 篇 · ${data.dir}` : '读工作区里的 .md 报告原文')),
+      workspaces && workspaces.length
+        ? h('div', { style: styles.quickList },
+            workspaces.map((w) => h('button', {
+              key: w.id,
+              style: dir === w.path ? styles.quickActive : styles.quick,
+              onClick: () => pick(w.path),
+              title: `${w.path}${w.exists ? '' : '（目录不存在）'}`,
+            }, `📁 ${w.title}`)))
+        : h('div', { style: styles.mutedSmall }, workspaces ? '没有可识别的工作区（注册表为空），直接填下面的目录。' : '正在读取工作区列表…'),
+      h('div', { style: styles.row, marginTop: 8 },
+        h('input', {
+          style: styles.search, placeholder: '报告目录（绝对路径），如 D:\\dsh-research',
+          value: dir, onChange: (e) => setDir(e.target.value),
+          onKeyDown: (e) => { if (e.key === 'Enter') pick(dir.trim()) },
+        }),
+        h('button', { style: styles.actionBtn, onClick: () => scan() }, busy ? '扫描中…' : '↻ 扫描'),
+        h('button', { style: styles.linkBtn, onClick: toggleDepth }, depth ? '只看本层' : '含子目录')),
+      h('div', { style: styles.mutedSmall }, '报告就是工作区里的文件本身：对话里写完、这里刷新就能看到；面板不改动、不复制你的文件。工作区以外的目录要在插件 Config 的 reportsDir 里登记后才能列。')),
+    error ? h('div', { style: styles.errorBox }, error) : null,
+
+    doc ? h('div', { ref: docRef, style: styles.detailCard },
+      h('div', { style: styles.row },
+        h('span', { style: { ...styles.sectionTitle, marginBottom: 0 } }, doc.name),
+        h('span', { style: styles.tag }, doc.kind.toUpperCase()),
+        h('span', { style: styles.grow }),
+        h('button', { style: styles.actionBtn, onClick: () => act(`读一下这份调研报告（${doc.path}），帮我提炼结论、数据依据和下一步该查什么。`) }, '🚀 让 AI 接着做'),
+        h('button', { style: styles.linkBtn, onClick: () => { try { Promise.resolve(navigator.clipboard.writeText(doc.path)).catch(() => {}) } catch { /* 无剪贴板权限 */ } } }, '复制路径'),
+        h('button', { style: styles.linkBtn, onClick: () => setDoc(null) }, '关闭')),
+      h('div', { style: styles.mutedSmall }, `${fmtSize(doc.size)} · ${fmtDate(doc.mtime)} · ${doc.path}`),
+      h('div', { style: styles.mdBody },
+        doc.binary
+          ? h('div', { style: styles.muted }, '这个文件是二进制内容，面板不预览。')
+          : doc.kind === 'md'
+            ? renderMarkdown(doc.text)
+            : h('pre', { style: styles.mdPlain }, doc.text))) : null,
+
+    data && !data.exists
+      ? h('div', { style: styles.card }, h('div', { style: styles.muted }, `目录不存在或不允许访问：${data.dir}`))
+      : entries.length === 0
+        ? h('div', { style: styles.card },
+            h('div', { style: styles.muted }, busy && !data
+              ? '正在扫描…'
+              : !data
+                ? '先选一个工作区或填目录。'
+                : query.trim()
+                  ? `没有匹配「${query.trim()}」的报告。`
+                  : `这个目录下还没有 Markdown 报告（只看 ${depth ? '两层' : '本层'}的 .md）。`),
+            h('div', { style: { ...styles.mutedSmall, marginTop: 6 } },
+              query.trim()
+                ? '清空上面的搜索框即可看到全部报告。'
+                : '在对话里说一句「把这次调研写成报告」，agent 会把 .md 写进工作区；回到这里点「↻ 扫描」即可看到。'))
+        : [
+            data?.truncated
+              ? h('div', { key: '__trunc', style: styles.hint }, `只显示前 ${entries.length} 篇（目录里还有更多），用搜索框收窄范围。`)
+              : null,
+            ...entries.map((e) => h('div', { key: e.path, style: { ...styles.card, cursor: 'pointer' }, onClick: () => open(e) },
+              h('div', { style: styles.row },
+                h('span', { style: styles.reportName }, e.name),
+                h('span', { style: styles.tag }, e.kind.toUpperCase()),
+                h('span', { style: styles.grow }),
+                h('span', { style: styles.mutedSmall }, `${fmtSize(e.size)} · ${fmtDate(e.mtime)}`)),
+              e.rel !== e.name ? h('div', { style: styles.mutedSmall }, e.rel) : null)),
+          ]
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +656,7 @@ function GuideTab() {
 // ---------- 主面板 ----------
 const TABS = [
   ['home', '🏠 概览'],
+  ['reports', '📄 调研报告'],
   ['history', '📋 调用历史'],
   ['endpoints', '🔎 端点库'],
   ['settings', '⚙️ 设置'],
@@ -388,17 +667,18 @@ function Panel() {
   const [tab, setTab] = useState('home')
   const [pending, setPending] = useState(null)
   const openFromHome = (call) => { setPending(call); setTab('history') }
-  const go = (id) => { setPending(null); setTab(id) }
+  const go = (id, payload) => { setPending(payload || null); setTab(id) }
   return h('div', { style: styles.wrap },
     h('div', { style: styles.tabBar },
       TABS.map(([id, label]) => h('button', {
         key: id, style: tab === id ? styles.tabActive : styles.tab, onClick: () => { setPending(null); setTab(id) },
       }, label))),
     tab === 'home' ? h(HomeTab, { go, open: openFromHome })
-      : tab === 'history' ? h(HistoryTab, { pending })
-        : tab === 'endpoints' ? h(EndpointsTab)
-          : tab === 'settings' ? h(SettingsTab)
-            : h(GuideTab))
+      : tab === 'reports' ? h(ReportsTab, { initial: pending })
+        : tab === 'history' ? h(HistoryTab, { pending })
+          : tab === 'endpoints' ? h(EndpointsTab)
+            : tab === 'settings' ? h(SettingsTab)
+              : h(GuideTab))
 }
 
 const styles = {
@@ -441,6 +721,21 @@ const styles = {
   errorBox: { background: '#fdf2f2', border: '1px solid #e7b4b4', borderRadius: 8, padding: '8px 10px', color: '#c0392b', fontSize: 12, marginTop: 8 },
   search: { flex: 1, minWidth: 180, boxSizing: 'border-box', padding: '8px 12px', border: '1px solid #d9d9de', borderRadius: 8, fontSize: 13, marginBottom: 10 },
   pre: { background: '#1f1308', color: '#f3d9c4', borderRadius: 8, padding: 10, fontSize: 11.5, lineHeight: 1.6, overflow: 'auto', maxHeight: 320, whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 8 },
+  reportName: { fontWeight: 700, fontSize: 13, color: '#1a1a1a', wordBreak: 'break-all' },
+  mdBody: { marginTop: 8, maxHeight: 460, overflow: 'auto', background: '#fff', border: '1px solid #f0dcc8', borderRadius: 8, padding: '10px 12px' },
+  mdH: { fontWeight: 700, color: '#1f1308', margin: '10px 0 6px' },
+  mdP: { margin: '6px 0', lineHeight: 1.75, whiteSpace: 'pre-wrap', color: '#2a2a30' },
+  mdList: { margin: '6px 0', paddingLeft: 20, lineHeight: 1.75, color: '#2a2a30' },
+  mdLi: { margin: '2px 0' },
+  mdQuote: { borderLeft: '3px solid #f0dcc8', padding: '2px 10px', margin: '6px 0', color: '#8a6a52', background: '#fffaf5' },
+  mdCode: { background: '#1f1308', color: '#f3d9c4', borderRadius: 6, padding: 8, fontSize: 11.5, overflow: 'auto', whiteSpace: 'pre-wrap', margin: '8px 0' },
+  mdPlain: { background: '#fffaf5', color: '#2a2a30', borderRadius: 6, padding: 8, fontSize: 12, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  inlineCode: { background: '#fdf1e7', borderRadius: 4, padding: '0 4px', fontSize: 12, fontFamily: 'Consolas, monospace' },
+  mdLink: { color: '#c2410c' },
+  mdTable: { borderCollapse: 'collapse', width: '100%', margin: '8px 0', fontSize: 12 },
+  mdTh: { border: '1px solid #f0dcc8', padding: '4px 6px', background: '#fffaf5', textAlign: 'left', fontWeight: 700 },
+  mdTd: { border: '1px solid #eee3d6', padding: '4px 6px', verticalAlign: 'top' },
+  mdHr: { border: 'none', borderTop: '1px solid #f0dcc8', margin: '10px 0' },
   stepList: { lineHeight: 1.9 },
   quote: { background: '#fdf1e7', borderRadius: 6, padding: '4px 10px', margin: '4px 0', color: '#c2410c' },
 }

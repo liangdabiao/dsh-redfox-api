@@ -18,6 +18,7 @@ export const inject = ['tools', 'skills', 'webServer', 'connection']
 
 export const Config = Schema.object({
   redfoxApiKey: Schema.string().default('').description('RedFoxHub API key（redfox.hk/settings/api-keys 获取；敏感，仅本插件使用）'),
+  reportsDir: Schema.string().default('').description('可选：额外登记一个调研报告目录（面板「📄 调研报告」也能扫到它，默认只列 DSH 工作区）'),
 })
 
 const configRef = { config: Config }
@@ -285,7 +286,9 @@ export const redfoxHistoryTool = {
 
 const skillDirsRef = { dirs: [] }
 
-export function apply(ctx) {
+export function apply(ctx, config) {
+  // 之前这里是 schema 对象，Config 里填的 key / reportsDir 永远读不到；宿主的 apply 第二参才是解析后的配置。
+  configRef.config = config ?? {}
   const skillDirs = [join(dirname(fileURLToPath(import.meta.url)), '..', 'skills')]
   skillDirsRef.dirs = skillDirs
   ctx.effect(() => ctx.tools.register(redfoxEndpointTool), `${name}: tool endpoint`)
